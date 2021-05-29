@@ -25,11 +25,11 @@ class Path
 public:
     Path(ReadBuffer & in_);
     bool pathMatch(StringRef name_ref);
-
+    void retract();
+    size_t current_token;
 private:
     bool advanceToNextToken(size_t token_index, ReadBuffer & in_);
     StringRef readTokenName(ReadBuffer & buf);
     std::vector<Token> path;
-    size_t current_token;
 };
 }

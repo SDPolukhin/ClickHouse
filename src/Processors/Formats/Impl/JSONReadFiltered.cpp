@@ -36,7 +36,7 @@ JSONReadFiltered::JSONReadFiltered(
     {
         const String & column_name = columnName(i);
         name_map[column_name] = i; /// NOTE You could place names more cache-locally.
-        if (format_settings_.import_nested_json)
+        /*if (format_settings_.import_nested_json)
         {
             const auto split = Nested::splitName(column_name);
             if (!split.second.empty())
@@ -44,7 +44,7 @@ JSONReadFiltered::JSONReadFiltered(
                 const StringRef table_name(column_name.data(), split.first.size());
                 name_map[table_name] = NESTED_FIELD;
             }
-        }
+        }*/
     }
     prev_positions.resize(num_columns);
 }
@@ -80,7 +80,7 @@ inline size_t JSONReadFiltered::columnIndex(const StringRef & name, size_t key_i
 StringRef JSONReadFiltered::readColumnName(ReadBuffer & buf)
 {
     // This is just an optimization: try to avoid copying the name into current_column_name
-    if (nested_prefix_length == 0 && !buf.eof() && buf.position() + 1 < buf.buffer().end())
+    if (/*nested_prefix_length == 0 &&*/ !buf.eof() && buf.position() + 1 < buf.buffer().end())
     {
         char * next_pos = find_first_symbols<'\\', '"'>(buf.position() + 1, buf.buffer().end());
         if (next_pos != buf.buffer().end() && *next_pos != '\\')
@@ -92,9 +92,10 @@ StringRef JSONReadFiltered::readColumnName(ReadBuffer & buf)
             return res;
         }
     }
-    current_column_name.resize(nested_prefix_length);
+    throw Exception("End of file when reading column name", ErrorCodes::INCORRECT_DATA);
+    /*current_column_name.resize(nested_prefix_length);
     readJSONStringInto(current_column_name, buf);
-    return current_column_name;
+    return current_column_name;*/
 }
 static inline void skipColonDelimeter(ReadBuffer & istr)
 {
@@ -186,10 +187,10 @@ void JSONReadFiltered::readJSONObject(MutableColumns & columns)
                 current_column_name.assign(name_ref.data, name_ref.size);
                 name_ref = StringRef(current_column_name);
                 skipColonDelimeter(in);
-                if (column_index == UNKNOWN_FIELD)
+                if (*in.position() == '{')
+                    readJSONObject(columns);
+                else if (column_index == UNKNOWN_FIELD)
                     skipUnknownField(name_ref);
-                else if (column_index == NESTED_FIELD)
-                    readNestedData(name_ref.toString(), columns);
                 else
                     throw Exception("Logical error: illegal value of column_index", ErrorCodes::LOGICAL_ERROR);
             }
@@ -198,6 +199,7 @@ void JSONReadFiltered::readJSONObject(MutableColumns & columns)
                 skipColonDelimeter(in);
                 readField(column_index, columns);
             }
+            read_path->retract();
         }
         else
         {
@@ -205,14 +207,13 @@ void JSONReadFiltered::readJSONObject(MutableColumns & columns)
         }
     }
 }
-void JSONReadFiltered::readNestedData(const String & name, MutableColumns & columns)
+/*void JSONReadFiltered::readNestedData(const String & name, MutableColumns & columns)
 {
     current_column_name = name;
     current_column_name.push_back('.');
     nested_prefix_length = current_column_name.size();
-    readJSONObject(columns);
     nested_prefix_length = 0;
-}
+}*/
 bool JSONReadFiltered::readRow(MutableColumns & columns, RowReadExtension & ext)
 {
     if (!allow_new_rows)
@@ -247,6 +248,7 @@ bool JSONReadFiltered::readRow(MutableColumns & columns, RowReadExtension & ext)
     read_columns.assign(num_columns, false);
     seen_columns.assign(num_columns, false);
     nested_prefix_length = 0;
+    readPath();
     readJSONObject(columns);
     const auto & header = getPort().getHeader();
     /// Fill non-visited columns with the default values.

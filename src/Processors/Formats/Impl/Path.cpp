@@ -70,15 +70,24 @@ Path::Path(ReadBuffer & in_)
     }
     current_token = 0;
 }
+void Path::retract()
+{
+    --current_token;
+    while (path[current_token].type == Type::filter)
+        --current_token;
+}
 bool Path::pathMatch(StringRef name_ref)
 {
     switch (path[current_token].type)
     {
         case Type::any:
+            ++current_token;
             return true;
         case Type::name:
+            ++current_token;
             return (path[current_token].string_value.data == name_ref.data);
         case Type::filter:
+            ++current_token;
             return false;
     }
     return false;
