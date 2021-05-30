@@ -10,7 +10,6 @@ bool Path::advanceToNextToken(size_t token_index, ReadBuffer & in_)
         throw ParsingException("Unexpected end of stream while parsing JSONReadFiltered format", ErrorCodes::CANNOT_READ_ALL_DATA);
     else if (*in_.position() == '{')
     {
-        ++in_.position();
         return false;
     }
 
@@ -61,33 +60,50 @@ Path::Path(ReadBuffer & in_)
         }
         else if (*in_.position() == '*')
         {
-            path.push_back({Type::any, NULL});
+            assertChar('*', in_);
+            path.push_back({Type::any, ""});
         }
         else
         {
-            path.push_back({Type::filter, NULL});
+            path.push_back({Type::filter, ""});
         }
     }
     current_token = 0;
 }
+bool Path::advance()
+{
+    size_t backup = current_token;
+    while (path[current_token].type == Type::filter && current_token < path.size())
+        ++current_token;
+    if (current_token + 1 < path.size())
+    {
+        ++current_token;
+        return true;
+    }
+    else
+    {
+        current_token = backup;
+        return false;
+    }
+}
 void Path::retract()
 {
-    --current_token;
-    while (path[current_token].type == Type::filter)
+    if (current_token > 0)
+    {
         --current_token;
+        while (path[current_token].type == Type::filter && current_token > 0)
+            --current_token;
+    }
 }
 bool Path::pathMatch(StringRef name_ref)
 {
     switch (path[current_token].type)
     {
         case Type::any:
-            ++current_token;
             return true;
         case Type::name:
-            ++current_token;
-            return (path[current_token].string_value.data == name_ref.data);
+            return (path[current_token].string_value.toString() == name_ref.toString());
         case Type::filter:
-            ++current_token;
             return false;
     }
     return false;

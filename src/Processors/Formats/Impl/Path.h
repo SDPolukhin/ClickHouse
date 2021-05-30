@@ -25,6 +25,7 @@ class Path
 public:
     Path(ReadBuffer & in_);
     bool pathMatch(StringRef name_ref);
+    bool advance();
     void retract();
     size_t current_token;
 private:

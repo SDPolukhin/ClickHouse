@@ -35,16 +35,7 @@ JSONReadFiltered::JSONReadFiltered(
     for (size_t i = 0; i < num_columns; ++i)
     {
         const String & column_name = columnName(i);
-        name_map[column_name] = i; /// NOTE You could place names more cache-locally.
-        /*if (format_settings_.import_nested_json)
-        {
-            const auto split = Nested::splitName(column_name);
-            if (!split.second.empty())
-            {
-                const StringRef table_name(column_name.data(), split.first.size());
-                name_map[table_name] = NESTED_FIELD;
-            }
-        }*/
+        name_map[column_name] = i;
     }
     prev_positions.resize(num_columns);
 }
@@ -54,8 +45,6 @@ const String & JSONReadFiltered::columnName(size_t i) const
 }
 inline size_t JSONReadFiltered::columnIndex(const StringRef & name, size_t key_index)
 {
-    /// Optimization by caching the order of fields (which is almost always the same)
-    /// and a quick check to match the next expected field, instead of searching the hash table.
     if (prev_positions.size() > key_index && prev_positions[key_index] && name == prev_positions[key_index]->getKey())
     {
         return prev_positions[key_index]->getMapped();
@@ -73,29 +62,22 @@ inline size_t JSONReadFiltered::columnIndex(const StringRef & name, size_t key_i
             return UNKNOWN_FIELD;
     }
 }
-/** Read the field name and convert it to column name
-  *  (taking into account the current nested name prefix)
-  * Resulting StringRef is valid only before next read from buf.
-  */
 StringRef JSONReadFiltered::readColumnName(ReadBuffer & buf)
 {
-    // This is just an optimization: try to avoid copying the name into current_column_name
-    if (/*nested_prefix_length == 0 &&*/ !buf.eof() && buf.position() + 1 < buf.buffer().end())
+    if (!buf.eof() && buf.position() + 1 < buf.buffer().end())
     {
         char * next_pos = find_first_symbols<'\\', '"'>(buf.position() + 1, buf.buffer().end());
         if (next_pos != buf.buffer().end() && *next_pos != '\\')
         {
-            /// The most likely option is that there is no escape sequence in the key name, and the entire name is placed in the buffer.
             assertChar('"', buf);
             StringRef res(buf.position(), next_pos - buf.position());
             buf.position() = next_pos + 1;
             return res;
         }
     }
-    throw Exception("End of file when reading column name", ErrorCodes::INCORRECT_DATA);
-    /*current_column_name.resize(nested_prefix_length);
+    current_column_name.resize(0);
     readJSONStringInto(current_column_name, buf);
-    return current_column_name;*/
+    return current_column_name;
 }
 static inline void skipColonDelimeter(ReadBuffer & istr)
 {
@@ -167,7 +149,9 @@ inline bool JSONReadFiltered::advanceToNextKey(size_t key_index)
 void JSONReadFiltered::readPath()
 {
     skipWhitespaceIfAny(in);
-    read_path = new Path(in);
+    if (read_path == NULL)
+        read_path = std::make_shared<Path>(in);
+    skipWhitespaceIfAny(in);
 }
 void JSONReadFiltered::readJSONObject(MutableColumns & columns)
 {
@@ -180,15 +164,16 @@ void JSONReadFiltered::readJSONObject(MutableColumns & columns)
         {
             if (unlikely(ssize_t(column_index) < 0))
             {
-                /// name_ref may point directly to the input buffer
-                /// and input buffer may be filled with new data on next read
-                /// If we want to use name_ref after another reads from buffer, we must copy it to temporary string.
-                //if ()
                 current_column_name.assign(name_ref.data, name_ref.size);
                 name_ref = StringRef(current_column_name);
                 skipColonDelimeter(in);
                 if (*in.position() == '{')
-                    readJSONObject(columns);
+                {
+                    if (read_path->advance())
+                        readJSONObject(columns);
+                    else
+                        skipJSONField(in, name_ref);
+                }
                 else if (column_index == UNKNOWN_FIELD)
                     skipUnknownField(name_ref);
                 else
@@ -199,45 +184,31 @@ void JSONReadFiltered::readJSONObject(MutableColumns & columns)
                 skipColonDelimeter(in);
                 readField(column_index, columns);
             }
-            read_path->retract();
         }
         else
         {
-            skipJSONField(in, name_ref);
+            skipColonDelimeter(in);
+            skipUnknownField(name_ref);
         }
     }
+    read_path->retract();
 }
-/*void JSONReadFiltered::readNestedData(const String & name, MutableColumns & columns)
-{
-    current_column_name = name;
-    current_column_name.push_back('.');
-    nested_prefix_length = current_column_name.size();
-    nested_prefix_length = 0;
-}*/
 bool JSONReadFiltered::readRow(MutableColumns & columns, RowReadExtension & ext)
 {
     if (!allow_new_rows)
         return false;
     skipWhitespaceIfAny(in);
-    /// We consume , or \n before scanning a new row, instead scanning to next row at the end.
-    /// The reason is that if we want an exact number of rows read with LIMIT x
-    /// from a streaming table engine with text data format, like File or Kafka
-    /// then seeking to next ;, or \n would trigger reading of an extra row at the end.
-    /// Semicolon is added for convenience as it could be used at end of INSERT query.
     bool is_first_row = getCurrentUnitNumber() == 0 && getTotalRows() == 1;
     if (!in.eof())
     {
-        /// There may be optional ',' (but not before the first row)
         if (!is_first_row && *in.position() == ',')
             ++in.position();
         else if (!data_in_square_brackets && *in.position() == ';')
         {
-            /// ';' means the end of query (but it cannot be before ']')
             return allow_new_rows = false;
         }
         else if (data_in_square_brackets && *in.position() == ']')
         {
-            /// ']' means the end of query
             return allow_new_rows = false;
         }
     }
@@ -247,15 +218,12 @@ bool JSONReadFiltered::readRow(MutableColumns & columns, RowReadExtension & ext)
     size_t num_columns = columns.size();
     read_columns.assign(num_columns, false);
     seen_columns.assign(num_columns, false);
-    nested_prefix_length = 0;
     readPath();
     readJSONObject(columns);
     const auto & header = getPort().getHeader();
-    /// Fill non-visited columns with the default values.
     for (size_t i = 0; i < num_columns; ++i)
         if (!seen_columns[i])
             header.getByPosition(i).type->insertDefaultInto(*columns[i]);
-    /// return info about defaults set
     ext.read_columns = read_columns;
     return true;
 }
@@ -266,14 +234,12 @@ void JSONReadFiltered::syncAfterError()
 void JSONReadFiltered::resetParser()
 {
     IRowInputFormat::resetParser();
-    nested_prefix_length = 0;
     read_columns.clear();
     seen_columns.clear();
     prev_positions.clear();
 }
 void JSONReadFiltered::readPrefix()
 {
-    /// In this format, BOM at beginning of stream cannot be confused with value, so it is safe to skip it.
     skipBOMIfExists(in);
     skipWhitespaceIfAny(in);
     if (!in.eof() && *in.position() == '[')

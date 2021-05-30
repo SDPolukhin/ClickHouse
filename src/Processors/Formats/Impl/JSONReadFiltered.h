@@ -56,7 +56,6 @@ private:
     /// created as follows
     ///        CREATE TABLE t (n Nested (i Int32, s String))
     /// the nested column names are 'n.i' and 'n.s' and the nested prefix is 'n.'
-    size_t nested_prefix_length = 0;
 
     /// Set of columns for which the values were read. The rest will be filled with default values.
     std::vector<UInt8> read_columns;
@@ -72,7 +71,7 @@ private:
     /// Cached search results for previous row (keyed as index in JSON object) - used as a hint.
     std::vector<NameMap::LookupResult> prev_positions;
 
-    Path * read_path;
+    std::shared_ptr<Path> read_path = NULL;
 
     /// This flag is needed to know if data is in square brackets.
     bool data_in_square_brackets = false;
