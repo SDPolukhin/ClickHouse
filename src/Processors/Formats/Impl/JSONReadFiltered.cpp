@@ -2,7 +2,6 @@
 #include <DataTypes/NestedUtils.h>
 #include <DataTypes/Serializations/SerializationNullable.h>
 #include <Formats/FormatFactory.h>
-#include <Formats/JSONEachRowUtils.h>
 #include <IO/ReadBufferFromString.h>
 #include <IO/ReadHelpers.h>
 #include <Processors/Formats/Impl/JSONReadFiltered.h>
@@ -150,7 +149,7 @@ void JSONReadFiltered::readPath()
 {
     skipWhitespaceIfAny(in);
     if (read_path == NULL)
-        read_path = std::make_shared<Path>(in);
+        read_path = new Path(in);
     skipWhitespaceIfAny(in);
 }
 void JSONReadFiltered::readJSONObject(MutableColumns & columns)
@@ -169,7 +168,7 @@ void JSONReadFiltered::readJSONObject(MutableColumns & columns)
                 skipColonDelimeter(in);
                 if (*in.position() == '{')
                 {
-                    if (read_path->advance())
+                    if (read_path->advance(in))
                         readJSONObject(columns);
                     else
                         skipJSONField(in, name_ref);
@@ -270,9 +269,8 @@ void registerInputFormatProcessorJSONReadFiltered(FormatFactory & factory)
             return std::make_shared<JSONReadFiltered>(buf, sample, std::move(params), settings, false);
         });
 }
-void registerFileSegmentationEngineJSONReadFiltered(FormatFactory & factory)
+JSONReadFiltered::~JSONReadFiltered()
 {
-    factory.registerFileSegmentationEngine("JSONReadFiltered", &fileSegmentationEngineJSONEachRowImpl);
-    factory.registerFileSegmentationEngine("JSONStringsEachRow", &fileSegmentationEngineJSONEachRowImpl);
+    delete read_path;
 }
 }

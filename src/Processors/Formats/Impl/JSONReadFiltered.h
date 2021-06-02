@@ -31,6 +31,7 @@ public:
     bool allowSyncAfterError() const override { return true; }
     void syncAfterError() override;
     void resetParser() override;
+    ~JSONReadFiltered();
 
 private:
     const String & columnName(size_t i) const;
@@ -71,7 +72,7 @@ private:
     /// Cached search results for previous row (keyed as index in JSON object) - used as a hint.
     std::vector<NameMap::LookupResult> prev_positions;
 
-    std::shared_ptr<Path> read_path = NULL;
+    Path * read_path = NULL;
 
     /// This flag is needed to know if data is in square brackets.
     bool data_in_square_brackets = false;
