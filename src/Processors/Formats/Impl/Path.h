@@ -17,7 +17,8 @@ enum class Type : char
 struct Token
 {
     Type type;
-    StringRef string_value;
+    String string_value;
+    Token(Type type_, String str) : type(type_), string_value(str) {}
 };
 
 class Path
@@ -25,12 +26,15 @@ class Path
 public:
     Path(ReadBuffer & in_);
     bool pathMatch(StringRef name_ref);
-    bool advance();
+    bool checkFilter(StringRef name_ref);
+    bool advance(ReadBuffer & in);
     void retract();
     size_t current_token;
+    ~Path();
 private:
     bool advanceToNextToken(size_t token_index, ReadBuffer & in_);
-    StringRef readTokenName(ReadBuffer & buf);
+    String readTokenName(ReadBuffer & buf);
+    String readFilter(ReadBuffer & buf);
     std::vector<Token> path;
 };
 }
